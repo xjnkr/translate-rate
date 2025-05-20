@@ -31,7 +31,7 @@ async function fetchGitHubAPI(path) {
     return response.json();
 }
 
-// 파일 내용 가져오고 '번역:' 문자열 확인 (기존과 동일)
+// 파일 내용 가져오고 '번역:' 또는 '한글' 문자열 확인
 async function isIndexMdTranslated(filePath) {
     try {
         const fileData = await fetchGitHubAPI(filePath);
@@ -40,7 +40,8 @@ async function isIndexMdTranslated(filePath) {
             return false;
         }
         const content = Buffer.from(fileData.content, 'base64').toString('utf-8');
-        return content.includes('번역:');
+        // '번역:' 문자열 또는 '한글' 문자열이 포함되어 있으면 번역된 것으로 간주
+        return content.includes('번역:') || content.includes('한글');
     } catch (error) {
         console.warn(`Warning: Could not fetch or decode content for ${filePath}: ${error.message}`);
         return false;
@@ -57,7 +58,7 @@ async function getRecursiveItemStatus(itemEntry) {
 
     if (itemType === 'file') {
         if (itemName.toLowerCase() === 'index.md') {
-            const translated = await isIndexMdTranslated(itemPath);
+            const translated = await isIndexMdTranslated(itemPath); // 수정된 함수 호출
             return {
                 name: itemName,
                 path: itemPath,
@@ -93,34 +94,39 @@ async function getRecursiveItemStatus(itemEntry) {
     const childrenResults = (await Promise.all(childPromises)).filter(child => child !== null);
 
     let overallStatus = 'red';
-    const indexMdFilesInSubtree = [];
-    function collectIndexMdFiles(nodes) {
+    const indexMdStatusesInSubtree = []; // 이제 상태('green', 'red')를 직접 저장
+
+    function collectIndexMdStatuses(nodes) {
         for (const node of nodes) {
             if (!node.isDir && node.name.toLowerCase() === 'index.md') {
-                indexMdFilesInSubtree.push(node.status);
+                indexMdStatusesInSubtree.push(node.status); // 'green' 또는 'red'
             }
             if (node.isDir && node.children.length > 0) {
-                collectIndexMdFiles(node.children);
+                collectIndexMdStatuses(node.children);
             }
         }
     }
-    const directIndexMdInCurrentDir = childrenResults.find(c => !c.isDir && c.name.toLowerCase() === 'index.md');
-    if (directIndexMdInCurrentDir) {
-        indexMdFilesInSubtree.push(directIndexMdInCurrentDir.status);
+
+    // 현재 디렉토리의 직속 index.md 파일 상태 수집
+    const directIndexMd = childrenResults.find(c => !c.isDir && c.name.toLowerCase() === 'index.md');
+    if (directIndexMd) {
+        indexMdStatusesInSubtree.push(directIndexMd.status);
     }
-    collectIndexMdFiles(childrenResults.filter(c => c.isDir));
+
+    // 하위 디렉토리의 index.md 파일 상태 수집
+    childrenResults.filter(c => c.isDir).forEach(dirNode => collectIndexMdStatuses(dirNode.children));
 
 
-    if (indexMdFilesInSubtree.length > 0) {
-        if (indexMdFilesInSubtree.every(s => s === 'green')) {
+    if (indexMdStatusesInSubtree.length > 0) {
+        if (indexMdStatusesInSubtree.every(s => s === 'green')) {
             overallStatus = 'green';
-        } else if (indexMdFilesInSubtree.some(s => s === 'green' || s === 'yellow')) { // 자식 폴더가 yellow일 수도 있음
-            overallStatus = 'yellow';
+        } else if (indexMdStatusesInSubtree.some(s => s === 'green')) {
+            overallStatus = 'yellow'; // 'green'이 하나라도 있으면 'yellow'
         } else {
-            overallStatus = 'red';
+            overallStatus = 'red'; // 모두 'red'이거나, 'green'이 하나도 없음
         }
     } else {
-         overallStatus = 'red'; // index.md 파일이 전혀 없음
+         overallStatus = 'red'; // 이 디렉토리 및 하위에 index.md 파일이 전혀 없음
     }
 
 
@@ -140,8 +146,7 @@ async function getRecursiveItemStatus(itemEntry) {
 
 export default async function handler(req, res) {
     if (!GITHUB_TOKEN) {
-        // 환경 변수 미설정 오류는 짧게 캐시
-        res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120'); // 1분 캐시, 2분간 stale 허용
+        res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120');
         return res.status(500).json({ error: 'GITHUB_API_KEY environment variable is not set.' });
     }
 
@@ -149,7 +154,6 @@ export default async function handler(req, res) {
         const rootDirItems = await fetchGitHubAPI(ROOT_DOCS_PATH);
         if (!Array.isArray(rootDirItems)) {
             console.error("Root items is not an array:", rootDirItems);
-            // 이 오류도 짧게 캐시
             res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120');
             return res.status(500).json({ error: "Failed to fetch root directory structure from GitHub." });
         }
@@ -165,17 +169,14 @@ export default async function handler(req, res) {
             .filter(s => s !== null)
             .sort((a, b) => a.name.localeCompare(b.name));
 
-        // 성공적인 응답에 대한 캐시 설정
-        // s-maxage=600: Vercel Edge 캐시에 10분간 저장
-        // stale-while-revalidate=1800: 10분 후부터 추가 30분간은 만료된 캐시를 먼저 보여주고 백그라운드에서 갱신
         res.setHeader('Cache-Control', 's-maxage=600, stale-while-revalidate=1800');
         res.status(200).json(statuses);
 
     } catch (error) {
         console.error('Error in handler:', error);
-        // API 속도 제한(403) 또는 기타 서버 오류 발생 시 짧게 캐시
-        const statusCode = error.message && error.message.includes('403') ? 403 : 500;
-        res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120'); // 1분 캐시
+        const statusCode = error.message && error.message.includes('401') ? 401 : // 401 에러 명시적 처리
+                           error.message && error.message.includes('403') ? 403 : 500;
+        res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=120');
         res.status(statusCode).json({
             error: `Failed to process translation statuses: ${error.message}`,
             stack: error.stack ? error.stack.toString() : 'No stack available'
