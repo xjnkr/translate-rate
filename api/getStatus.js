@@ -1,33 +1,23 @@
 // api/getStatus.js
-const fetch = require('node-fetch'); // 또는 Node.js 18+ 환경이면 global fetch 사용 가능
+const fetch = require('node-fetch'); // Vercel 환경에 따라 Node.js 18+이면 global fetch 사용 가능
 
 const GITHUB_TOKEN = process.env.GITHUB_API_KEY;
 const REPO_OWNER = 'krfoss';
 const REPO_NAME = 'kali-docs';
-const DOCS_PATH = ''; // 저장소 루트를 가리키도록 변경 (기존 'docs'에서 수정)
+const ROOT_DOCS_PATH = ''; // 저장소 루트에서 시작
 
-// 스캔에서 제외할 폴더 및 파일 목록 (소문자로)
 const EXCLUDED_ITEMS = [
-    '.github',
-    '.vuepress',
-    'readme.md', // 루트 README.md는 보통 개요이므로, 번역 상태 목록에서 제외 원하면 포함
-    'contributing.md',
-    'license',
-    'package.json',
-    'package-lock.json',
-    'netlify.toml',
-    // 기타 설정 파일이나 번역과 무관한 파일/폴더 추가 가능
+    '.github', '.vuepress', 'readme.md', 'contributing.md', 'license',
+    'package.json', 'package-lock.json', 'netlify.toml', 'node_modules',
+    // 이미지나 기타 번역과 무관한 폴더/파일 추가
+    'images', 'img', 'assets',
 ];
 
 // GitHub API 호출 함수
 async function fetchGitHubAPI(path) {
-    // path가 빈 문자열일 경우에도 GitHub API는 contents/ 뒤에 아무것도 없는 형태로 루트를 잘 인식합니다.
-    // path가 있으면 'contents/path' 형태가 됩니다.
     const apiPath = path ? `contents/${path}` : 'contents';
     const url = `https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/${apiPath}`;
-    
-    console.log(`Fetching from GitHub API: ${url}`); // 디버깅용 로그
-
+    // console.log(`Fetching: ${url}`); // 디버깅 시 사용
     const response = await fetch(url, {
         headers: {
             'Authorization': `token ${GITHUB_TOKEN}`,
@@ -37,95 +27,122 @@ async function fetchGitHubAPI(path) {
     if (!response.ok) {
         const errorText = await response.text();
         console.error(`GitHub API Error for path '${path}': ${response.status} - ${errorText}`);
-        // 404 에러의 경우, 해당 경로에 파일/디렉토리가 없는 것이므로, 경우에 따라 다르게 처리할 수 있음
-        // 여기서는 호출하는 쪽에서 처리하도록 에러를 그대로 throw
         throw new Error(`GitHub API Error: ${response.status} for path '${path}'`);
     }
     return response.json();
 }
 
-// 파일 내용 가져오고 '번역:' 문자열 확인
-async function isFileTranslated(filePath) {
+// 파일 내용 가져오고 '번역:' 문자열 확인 (개별 index.md 파일용)
+async function isIndexMdTranslated(filePath) {
     try {
-        const fileDataArray = await fetchGitHubAPI(filePath); // GitHub API는 파일 경로에 대해 배열로 응답하지 않음. 객체로 응답.
-        // fetchGitHubAPI는 path에 대한 내용을 반환. 파일인 경우 파일 객체, 디렉토리인 경우 아이템 배열.
-        // isFileTranslated는 파일 경로를 받으므로, 파일 객체를 기대해야 함.
-        // 이 함수는 getDirectoryTranslationStatus 내에서 item.path (파일 경로)로 호출됨
-        // 따라서 fetchGitHubAPI(filePath)는 해당 파일의 정보를 담은 객체를 반환해야 함.
-
-        // filePath로 직접 파일 내용을 가져오는 API를 사용해야 함.
-        // 위의 fetchGitHubAPI는 디렉토리 목록 또는 단일 파일 메타데이터용.
-        // 파일 내용을 직접 가져오려면 Accept 헤더에 'application/vnd.github.VERSION.raw' 또는 base64 인코딩된 content를 파싱해야 함.
-        // 현재 fetchGitHubAPI는 JSON을 반환하므로, content 필드를 사용.
-
-        const fileData = await fetchGitHubAPI(filePath); // 이 filePath는 파일의 전체 경로여야 함.
-                                                        // ex: "administration/index.md"
-
+        const fileData = await fetchGitHubAPI(filePath);
         if (fileData.type !== 'file' || typeof fileData.content === 'undefined') {
-             // 간혹 API 응답이 예상과 다를 수 있으므로 content 존재 여부 확인
-            console.warn(`Item at ${filePath} is not a file or has no content field.`);
-            return false;
+            console.warn(`Item at ${filePath} is not a file or has no content.`);
+            return false; // 'red' 상태에 해당
         }
         const content = Buffer.from(fileData.content, 'base64').toString('utf-8');
-        return content.includes('번역:');
+        return content.includes('번역:'); // true면 'green', false면 'red'
     } catch (error) {
-        // 파일이 없거나 (404), 접근 권한이 없거나, API 리밋 등 다양한 이유로 실패 가능
         console.warn(`Warning: Could not fetch or decode content for ${filePath}: ${error.message}`);
-        return false; // 파일 접근 불가 시 번역 안됨으로 간주
+        return false;
     }
 }
 
-// 디렉토리 내의 index.md 파일들의 번역 상태를 재귀적으로 확인
-async function getDirectoryTranslationStatus(dirPath) {
-    let totalIndexMdFiles = 0;
-    let translatedIndexMdFiles = 0;
-    let filesToProcess = []; // 처리할 파일 목록 (index.md만)
+// 디렉토리 또는 파일의 상세 상태를 재귀적으로 가져오는 함수
+async function getRecursiveItemStatus(itemEntry) {
+    const { path: itemPath, name: itemName, type: itemType, html_url: itemUrl } = itemEntry;
 
-    async function findIndexMdRecursive(currentPath) {
-        let items;
-        try {
-            items = await fetchGitHubAPI(currentPath); // items는 배열이어야 함
-            if (!Array.isArray(items)) { // 디렉토리가 아닌 단일 파일 등을 실수로 요청한 경우
-                console.warn(`Expected array of items for directory ${currentPath}, but got:`, items);
-                return;
-            }
-        } catch (error) {
-            console.warn(`Warning: Could not fetch directory contents for ${currentPath}: ${error.message}`);
-            return; // 디렉토리 접근 불가 시 (예: 404 Not Found for an empty or non-existent dir)
+    // 제외 목록 확인
+    if (EXCLUDED_ITEMS.includes(itemName.toLowerCase()) || itemName.startsWith('_')) {
+        return null;
+    }
+
+    if (itemType === 'file') {
+        if (itemName.toLowerCase() === 'index.md') {
+            const translated = await isIndexMdTranslated(itemPath);
+            return {
+                name: itemName,
+                path: itemPath,
+                url: itemUrl || `https://github.com/${REPO_OWNER}/${REPO_NAME}/blob/master/${itemPath}`,
+                status: translated ? 'green' : 'red',
+                isDir: false,
+                children: [],
+            };
         }
+        return null; // index.md가 아닌 파일은 결과에서 제외
+    }
 
-        for (const item of items) {
-            if (item.type === 'file' && item.name.toLowerCase() === 'index.md') {
-                // isFileTranslated를 여기서 바로 호출하지 않고, 파일 경로만 수집
-                filesToProcess.push(item.path);
-            } else if (item.type === 'dir') {
-                // 제외 목록에 있는 디렉토리 이름 또는 _로 시작하는 디렉토리 무시
-                if (item.name.startsWith('_') || EXCLUDED_ITEMS.includes(item.name.toLowerCase())) {
-                    continue;
-                }
-                await findIndexMdRecursive(item.path); // item.path는 '폴더명' 또는 '상위폴더/폴더명'
+    // itemType === 'dir'
+    let dirContents;
+    try {
+        dirContents = await fetchGitHubAPI(itemPath); // 디렉토리 내용 가져오기
+        if (!Array.isArray(dirContents)) {
+            console.warn(`Expected array for dir contents at ${itemPath}, got:`, dirContents);
+            dirContents = [];
+        }
+    } catch (error) {
+        // 디렉토리 접근 실패 시 (예: 권한 없음, 삭제된 경로 등)
+        console.warn(`Failed to fetch contents for directory ${itemPath}: ${error.message}`);
+        return { // 오류 발생 디렉토리는 'red'로 표시하고 하위 탐색 중단
+            name: itemName,
+            path: itemPath,
+            url: itemUrl || `https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/master/${itemPath}`,
+            status: 'red',
+            isDir: true,
+            children: [],
+        };
+    }
+
+    const childPromises = dirContents.map(child => getRecursiveItemStatus(child));
+    const childrenResults = (await Promise.all(childPromises)).filter(child => child !== null);
+
+    // 현재 디렉토리의 종합 상태 결정
+    let overallStatus = 'red'; // 기본값: 번역 안됨 또는 index.md 없음
+    const indexMdFilesInSubtree = [];
+
+    function collectIndexMdFiles(nodes) {
+        for (const node of nodes) {
+            if (!node.isDir && node.name.toLowerCase() === 'index.md') {
+                indexMdFilesInSubtree.push(node.status);
+            }
+            if (node.isDir && node.children.length > 0) {
+                collectIndexMdFiles(node.children);
             }
         }
     }
+    collectIndexMdFiles(childrenResults); // 현재 디렉토리의 직속 자식들로부터 시작
 
-    await findIndexMdRecursive(dirPath);
-
-    if (filesToProcess.length === 0) {
-        return 'red'; // 해당 디렉토리 및 하위에 index.md 파일이 하나도 없음
+    if (indexMdFilesInSubtree.length > 0) {
+        if (indexMdFilesInSubtree.every(s => s === 'green')) {
+            overallStatus = 'green'; // 모든 index.md가 번역됨
+        } else if (indexMdFilesInSubtree.some(s => s === 'green')) {
+            overallStatus = 'yellow'; // 일부만 번역됨 (green과 red가 섞여 있음)
+        } else {
+            overallStatus = 'red'; // 모든 index.md가 번역 안됨
+        }
+    } else {
+        // 이 디렉토리 및 하위에 index.md 파일이 전혀 없는 경우
+        // 이 디렉토리 자체에도 index.md가 있는지 확인 (childrenResults에서 직접 찾아야 함)
+        const directIndexMd = childrenResults.find(c => !c.isDir && c.name.toLowerCase() === 'index.md');
+        if (directIndexMd) {
+             overallStatus = directIndexMd.status; // 직속 index.md의 상태를 따름
+        } else {
+            overallStatus = 'red'; // 직속 index.md도 없고 하위에도 없음
+        }
     }
 
-    totalIndexMdFiles = filesToProcess.length;
 
-    // 모아진 index.md 파일들의 번역 상태를 병렬로 확인 (API 호출 최적화)
-    const translationChecks = filesToProcess.map(filePath => isFileTranslated(filePath));
-    const results = await Promise.all(translationChecks);
-    
-    translatedIndexMdFiles = results.filter(isTranslated => isTranslated).length;
-
-    if (totalIndexMdFiles === 0) return 'red'; // (위에서 이미 처리했지만, 안전장치)
-    if (translatedIndexMdFiles === totalIndexMdFiles) return 'green';
-    if (translatedIndexMdFiles > 0) return 'yellow';
-    return 'red';
+    return {
+        name: itemName,
+        path: itemPath,
+        url: itemUrl || `https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/master/${itemPath}`,
+        status: overallStatus,
+        isDir: true,
+        children: childrenResults.sort((a, b) => {
+            if (a.isDir !== b.isDir) return a.isDir ? -1 : 1; // 폴더 우선
+            return a.name.localeCompare(b.name);
+        }),
+    };
 }
 
 export default async function handler(req, res) {
@@ -134,41 +151,31 @@ export default async function handler(req, res) {
     }
 
     try {
-        const rootDirItems = await fetchGitHubAPI(DOCS_PATH); // DOCS_PATH가 ''이므로 루트 컨텐츠를 가져옴
-        const statuses = [];
-
+        const rootDirItems = await fetchGitHubAPI(ROOT_DOCS_PATH);
         if (!Array.isArray(rootDirItems)) {
-             console.error("Root items is not an array:", rootDirItems);
-             return res.status(500).json({ error: "Failed to fetch root directory structure from GitHub."});
+            console.error("Root items is not an array:", rootDirItems);
+            return res.status(500).json({ error: "Failed to fetch root directory structure from GitHub." });
         }
 
-        const directoriesToProcess = [];
-        for (const item of rootDirItems) {
-            // 디렉토리만 대상으로 하고, 제외 목록에 없는 것만 처리
-            if (item.type === 'dir' && !EXCLUDED_ITEMS.includes(item.name.toLowerCase()) && !item.name.startsWith('_')) {
-                directoriesToProcess.push(item);
+        const statusPromises = rootDirItems.map(item => {
+            // 루트 아이템 중 디렉토리만 처리 (파일은 getRecursiveItemStatus에서 index.md 아니면 null 반환)
+            if (item.type === 'dir') {
+                 return getRecursiveItemStatus(item);
             }
-            // 만약 루트에 있는 특정 md 파일(예: introduction/index.md와는 별개로)도 처리하고 싶다면 여기에 로직 추가
-            // else if (item.type === 'file' && item.name.toLowerCase() === 'some-root-file.md') { ... }
-        }
-        
-        // 각 주요 디렉토리의 상태를 병렬로 가져오기
-        const statusPromises = directoriesToProcess.map(async (dirItem) => {
-            const dirStatus = await getDirectoryTranslationStatus(dirItem.path); // dirItem.path는 디렉토리 이름 (예: 'administration')
-            return {
-                name: dirItem.name,
-                status: dirStatus,
-                path: dirItem.path,
-                url: `https://github.com/${REPO_OWNER}/${REPO_NAME}/tree/master/${dirItem.path}`
-            };
+            // 루트에 있는 index.md를 처리하려면 여기에 추가 (kali-docs는 루트에 index.md 없음)
+            // else if (item.type === 'file' && item.name.toLowerCase() === 'index.md') {
+            //    return getRecursiveItemStatus(item);
+            // }
+            return null;
         });
 
-        const resolvedStatuses = await Promise.all(statusPromises);
-        statuses.push(...resolvedStatuses);
+        const statuses = (await Promise.all(statusPromises))
+            .filter(s => s !== null) // null이 아닌 결과만 (제외된 항목, index.md 아닌 파일 등 제외)
+            .sort((a, b) => a.name.localeCompare(b.name));
 
-        res.status(200).json(statuses.sort((a, b) => a.name.localeCompare(b.name)));
+        res.status(200).json(statuses);
     } catch (error) {
         console.error('Error in handler:', error);
-        res.status(500).json({ error: error.message, stack: error.stack ? error.stack.toString() : 'No stack available' });
+        res.status(500).json({ error: error.message, stack: error.stack ? error.stack.toString() : 'No stack' });
     }
 }
