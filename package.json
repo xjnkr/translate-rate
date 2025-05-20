@@ -1,0 +1,12 @@
+{
+  "name": "kali-docs-translation-status",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vercel dev",
+    "deploy": "vercel deploy --prod"
+  },
+  "dependencies": {
+    "node-fetch": "^2.6.7"
+  }
+}
