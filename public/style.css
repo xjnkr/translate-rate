@@ -1,0 +1,102 @@
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+    line-height: 1.6;
+    margin: 0;
+    padding: 20px;
+    background-color: #f4f4f4;
+    color: #333;
+}
+
+header, footer {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+h1 {
+    color: #1a73e8; /* Kali blue-ish */
+}
+
+#repo-link {
+    color: #1a73e8;
+    text-decoration: none;
+}
+#repo-link:hover {
+    text-decoration: underline;
+}
+
+.legend {
+    margin-bottom: 20px;
+    text-align: center;
+    padding: 10px;
+    background-color: #fff;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.legend-item {
+    margin-right: 15px;
+    display: inline-flex;
+    align-items: center;
+}
+
+.status-circle {
+    display: inline-block;
+    width: 15px;
+    height: 15px;
+    border-radius: 50%;
+    margin-right: 8px;
+    border: 1px solid #ccc;
+}
+
+.status-circle.green { background-color: #28a745; border-color: #1e7e34;}
+.status-circle.yellow { background-color: #ffc107; border-color: #d39e00;}
+.status-circle.red { background-color: #dc3545; border-color: #b02a37;}
+
+#status-container {
+    background-color: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+#loading-message {
+    text-align: center;
+    font-style: italic;
+    color: #777;
+}
+
+ul {
+    list-style-type: none;
+    padding: 0;
+}
+
+li {
+    padding: 12px 0;
+    border-bottom: 1px solid #eee;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+li:last-child {
+    border-bottom: none;
+}
+
+li .name {
+    font-weight: bold;
+}
+
+li a {
+    color: #007bff;
+    text-decoration: none;
+    font-size: 0.9em;
+}
+li a:hover {
+    text-decoration: underline;
+}
+
+footer {
+    margin-top: 30px;
+    font-size: 0.9em;
+    color: #666;
+}
