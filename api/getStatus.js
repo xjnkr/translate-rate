@@ -41,7 +41,7 @@ async function isIndexMdTranslated(filePath) {
         }
         const content = Buffer.from(fileData.content, 'base64').toString('utf-8');
         // '번역:' 문자열 또는 '한글' 문자열이 포함되어 있으면 번역된 것으로 간주
-        return content.includes('xjnkr') || content.includes('한글');
+        return content.includes('번역:') || content.includes('한글');
     } catch (error) {
         console.warn(`Warning: Could not fetch or decode content for ${filePath}: ${error.message}`);
         return false;
